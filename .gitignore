@@ -130,3 +130,17 @@ $RECYCLE.BIN/
 
 #MegaBasterd DB
 *.db
+
+
+#---------------------------------------#
+# Build Output                          #
+#---------------------------------------#
+
+# jpackage distribution
+dist/
+
+# Bundled JRE (built with jlink)
+jre/
+
+# Compiled JAR staging folder
+jar/
