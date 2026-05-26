@@ -22,3 +22,34 @@
 <p align="center"><a href="https://github.com/tonikelope/megabasterd/issues/385#issuecomment-1019215670">BONUS: Why the f*ck has MegaBasterd stopped downloading?</a></p>
 
 <p align="center"><b>IMPORTANT:</b> You are not authorized to use MegaBasterd in any way that violates <a href="https://mega.io/es/terms"><b>MEGA's terms of use</b></a>.</p>
+
+## Building from source (Windows)
+
+**Requirements:**
+- JDK 14+ (with `jpackage` and `jlink` on PATH)
+- Maven
+
+**1. Generate the bundled JRE (one-time)**
+
+```powershell
+jlink `
+  --module-path "$env:JAVA_HOME/jmods" `
+  --add-modules java.base,java.desktop,java.logging,java.sql,java.naming,java.xml,jdk.httpserver `
+  --output jre `
+  --strip-debug `
+  --compress=zip-6 `
+  --no-header-files `
+  --no-man-pages
+```
+
+**2. Build and package**
+
+```powershell
+.\build-dist.ps1
+```
+
+This will compile the source, copy the JAR, and produce a self-contained executable at:
+
+```
+dist\MegaBasterd\MegaBasterd.exe
+```
