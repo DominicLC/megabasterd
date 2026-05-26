@@ -69,7 +69,7 @@ import javax.swing.UIManager;
  */
 public final class MainPanel {
 
-    public static final String VERSION = "8.46";
+    public static final String VERSION = "8.51";
     public static final boolean FORCE_SMART_PROXY = false; //TRUE FOR DEBUGING SMART PROXY
     public static final int THROTTLE_SLICE_SIZE = 16 * 1024;
     public static final int DEFAULT_BYTE_BUFFER_SIZE = 16 * 1024;
@@ -234,6 +234,19 @@ public final class MainPanel {
             MiscTools.createUploadLogDir();
         }
 
+        // Issue #771: first-run language autodetection. Must run BEFORE the
+        // v8.27 migration below, which writes verify_down_file_migrated_v827
+        // and makes the settings table non-empty. We only autodetect on a true
+        // fresh install (no settings rows at all); existing users who never
+        // picked a language keep getting EN to avoid a surprise UI switch.
+        try {
+            if (DBTools.isSettingsTableEmpty()) {
+                DBTools.insertSettingValue("language", detectOsLanguage());
+            }
+        } catch (SQLException ex) {
+            Logger.getLogger(MainPanel.class.getName()).log(SEVERE, "first-run language autodetect failed", ex);
+        }
+
         // 8.27 migration: users who upgraded from pre-afb3936 builds (when
         // VERIFY_CBC_MAC_DEFAULT was false) have "verify_down_file" = "no"
         // persisted in their settings DB from any time they opened Settings
@@ -278,6 +291,36 @@ public final class MainPanel {
 
     public static String getLanguage() {
         return _language;
+    }
+
+    // Issue #771: first-run autodetection. Map the JVM default locale's
+    // ISO 639-1 code to MegaBasterd's internal language codes; fall back to
+    // EN when the OS language has no bundled translation.
+    public static String detectOsLanguage() {
+        String iso = java.util.Locale.getDefault().getLanguage();
+        if (iso == null) {
+            return DEFAULT_LANGUAGE;
+        }
+        switch (iso.toLowerCase(java.util.Locale.ROOT)) {
+            case "es":
+                return "ES";
+            case "it":
+                return "IT";
+            case "tr":
+                return "TU";
+            case "zh":
+                return "CH";
+            case "vi":
+                return "VI";
+            case "de":
+                return "GE";
+            case "hu":
+                return "HU";
+            case "en":
+                return "EN";
+            default:
+                return DEFAULT_LANGUAGE;
+        }
     }
 
     public static String getProxy_user() {
@@ -519,7 +562,7 @@ public final class MainPanel {
                 debug_panel.add(toolbar, java.awt.BorderLayout.NORTH);
                 debug_panel.add(debug_scroll, java.awt.BorderLayout.CENTER);
 
-                _view.getjTabbedPane1().addTab("DEBUG LOG",
+                _view.getjTabbedPane1().addTab(I18n.tr("ui.tab.debug_log"),
                         new javax.swing.ImageIcon(getClass().getResource("/images/icons8-services-30.png")),
                         debug_panel);
 
@@ -619,7 +662,7 @@ public final class MainPanel {
             while (!_exit) {
                 long used_memory = instance.totalMemory() - instance.freeMemory();
                 long max_memory = instance.maxMemory();
-                String text = "JVM-RAM used: " + MiscTools.formatBytes(used_memory) + " / " + MiscTools.formatBytes(max_memory);
+                String text = I18n.tr("ui.statusbar.jvm_ram", MiscTools.formatBytes(used_memory), MiscTools.formatBytes(max_memory));
                 // Skip setText if the rendered string is unchanged -- the EDT
                 // doesn't need a repaint event for "same value".
                 if (!text.equals(last_text)) {
@@ -1085,6 +1128,17 @@ public final class MainPanel {
             _language = DEFAULT_LANGUAGE;
         }
 
+        // External language file override (#766). Translators can point this at
+        // a UTF-8 .properties file on disk to test their translation without
+        // rebuilding the JAR; entries take precedence over the embedded bundle.
+        String external_language_file = DBTools.selectSettingValue("external_language_file");
+
+        if (external_language_file != null && !external_language_file.trim().isEmpty()) {
+            I18n.setExternalLanguageFile(Paths.get(external_language_file.trim()));
+        } else {
+            I18n.setExternalLanguageFile(null);
+        }
+
         String debug_file = selectSettingValue("debug_file");
 
         if (debug_file != null) {
@@ -1327,7 +1381,7 @@ public final class MainPanel {
                         LabelTranslatorSingleton.getInstance().translate("Yes")};
 
                     int n = showOptionDialog(getView(),
-                            LabelTranslatorSingleton.getInstance().translate("An older version (" + old_version + ") of MegaBasterd has been detected.\nDo you want to import all current settings and transfers from the previous version?\nWARNING: INCOMPATIBILITIES MAY EXIST BETWEEN VERSIONS."),
+                            I18n.tr("older_version_import_prompt", old_version),
                             LabelTranslatorSingleton.getInstance().translate("Warning!"), YES_NO_CANCEL_OPTION, JOptionPane.INFORMATION_MESSAGE,
                             null,
                             options,
