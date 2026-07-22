@@ -60,6 +60,7 @@ public class SettingsDialog extends javax.swing.JDialog {
 
     public static final String DEFAULT_SMART_PROXY_URL = "https://raw.githubusercontent.com/tonikelope/megabasterd/proxy_list/proxy_list.txt";
     private String _download_path;
+    private String _original_download_path;
     private String _custom_chunks_dir;
     private boolean _settings_ok;
     private final Set<String> _deleted_mega_accounts;
@@ -486,6 +487,8 @@ public class SettingsDialog extends javax.swing.JDialog {
             default_download_dir = Paths.get(default_download_dir == null ? MainPanel.MEGABASTERD_HOME_DIR : default_download_dir).toAbsolutePath().normalize().toString();
 
             _download_path = default_download_dir;
+
+            _original_download_path = default_download_dir;
 
             default_dir_label.setText(truncateText(_download_path, 80));
 
@@ -2497,6 +2500,13 @@ public class SettingsDialog extends javax.swing.JDialog {
             HashMap<String, Object> settings = new HashMap<>();
 
             settings.put("default_down_dir", _download_path);
+
+            // Explicitly changing the default here must win over the folder
+            // remembered from the last download, otherwise the new default
+            // would never show up in the new-download dialog.
+            if (!_download_path.equals(_original_download_path)) {
+                settings.put("last_down_dir", _download_path);
+            }
             settings.put("default_slots_down", String.valueOf(default_slots_down_spinner.getValue()));
             settings.put("default_slots_up", String.valueOf(default_slots_up_spinner.getValue()));
             settings.put("use_slots_down", multi_slot_down_checkbox.isSelected() ? "yes" : "no");

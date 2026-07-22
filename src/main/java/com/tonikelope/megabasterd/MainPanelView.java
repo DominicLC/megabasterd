@@ -1100,7 +1100,7 @@ public final class MainPanelView extends javax.swing.JFrame {
 
     private void new_download_menuActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_new_download_menuActionPerformed
 
-        final LinkGrabberDialog dialog = new LinkGrabberDialog(this, true, _main_panel.getDefault_download_path(), _main_panel.getClipboardspy());
+        final LinkGrabberDialog dialog = new LinkGrabberDialog(this, true, _main_panel.getLast_download_path(), _main_panel.getClipboardspy());
 
         _main_panel.getClipboardspy().attachObserver(dialog);
 
@@ -1140,6 +1140,20 @@ public final class MainPanelView extends javax.swing.JFrame {
         if (dialog.isDownload()) {
 
             getMain_panel().resumeDownloads();
+
+            // Remember the folder actually used so the next dialog reopens on
+            // it. Only on accept -- a browsed-then-cancelled batch was never
+            // "used". The DB write is off-EDT because insertSettingValue is
+            // synchronized on the shared connection.
+            _main_panel.setLast_download_path(dl_path);
+
+            THREAD_POOL.execute(() -> {
+                try {
+                    insertSettingValue("last_down_dir", dl_path);
+                } catch (SQLException ex) {
+                    LOG.log(SEVERE, null, ex);
+                }
+            });
 
             final MainPanelView tthis = this;
 
@@ -1431,6 +1445,12 @@ public final class MainPanelView extends javax.swing.JFrame {
                     global_speed_up_label.setForeground(new Color(0, 128, 255));
 
                 }
+
+                // Keep the pool big enough for the new concurrency limits --
+                // 2 pool threads per running transfer. Without this a raised
+                // max_downloads outruns the pool and transfers queue up while
+                // already counted as running.
+                MainPanel.resizeGlobalThreadPool(_main_panel.getMax_dl(), _main_panel.getMax_ul());
 
                 _main_panel.getDownload_manager().setMax_running_trans(_main_panel.getMax_dl());
 

@@ -1132,25 +1132,50 @@ public class Download implements Transference, Runnable, SecureSingleThreadNotif
             }
         }
 
-        if (_file != null && !getView().isKeepTempFileSelected()) {
-            _file.delete();
+        // Everything below is best-effort cleanup, but it sits BETWEEN the end
+        // of the main try/finally and the running-list removal further down.
+        // Anything thrown here used to escape run() entirely, so the download
+        // never removed itself from _transference_running_list -- it burned a
+        // max_downloads slot permanently and the queue wedged with items still
+        // waiting. Keep the failure local.
+        try {
+            if (_file != null && !getView().isKeepTempFileSelected()) {
+                _file.delete();
 
-            if (getChunkmanager() != null) {
+                if (getChunkmanager() != null) {
 
-                getChunkmanager().delete_chunks_temp_dir();
+                    getChunkmanager().delete_chunks_temp_dir();
 
-                File parent_download_dir = new File(getDownload_path() + "/" + getFile_name()).getParentFile();
+                    File parent_download_dir = new File(getDownload_path() + "/" + getFile_name()).getParentFile();
 
-                while (!parent_download_dir.getAbsolutePath().equals(getDownload_path()) && parent_download_dir.listFiles().length == 0) {
-                    parent_download_dir.delete();
-                    parent_download_dir = parent_download_dir.getParentFile();
-                }
+                    // listFiles() returns null (not an empty array) when the
+                    // directory is already gone -- which happens routinely here
+                    // because sibling downloads finishing in the same folder
+                    // race to prune the very same empty parents. That NPE was
+                    // the concrete way this block escaped run().
+                    while (parent_download_dir != null
+                            && !parent_download_dir.getAbsolutePath().equals(getDownload_path())) {
 
-                if (!(new File(getDownload_path() + "/" + getFile_name()).getParentFile().exists())) {
+                        File[] siblings = parent_download_dir.listFiles();
 
-                    getView().getOpen_folder_button().setEnabled(false);
+                        if (siblings == null || siblings.length != 0) {
+                            break;
+                        }
+
+                        parent_download_dir.delete();
+                        parent_download_dir = parent_download_dir.getParentFile();
+                    }
+
+                    File final_parent = new File(getDownload_path() + "/" + getFile_name()).getParentFile();
+
+                    if (final_parent != null && !final_parent.exists()) {
+
+                        getView().getOpen_folder_button().setEnabled(false);
+                    }
                 }
             }
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "Temp/dir cleanup failed for {0}: {1}", new Object[]{_file_name, t.getMessage()});
         }
 
         if ((_status_error == null && !_canceled) || global_cancel || !_auto_retry_on_error) {

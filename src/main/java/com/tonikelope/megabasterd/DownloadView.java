@@ -701,28 +701,33 @@ public class DownloadView extends javax.swing.JPanel implements TransferenceView
         }
     }
 
+    // NEVER read these through MiscTools.futureRun(...).get(). That submits a
+    // task to the global THREAD_POOL and then blocks waiting for it -- while
+    // the caller is itself usually running ON a THREAD_POOL thread
+    // (Download.run, checkSlotsAndWorkers). Since #773 bounded THREAD_POOL to
+    // GLOBAL_THREAD_POOL_MAX threads, that is a pool-starvation deadlock: with
+    // enough concurrent downloads every worker ends up blocked in get() waiting
+    // for a worker that will never free up. Download.run() hit it at the
+    // isKeepTempFileSelected() call in its cleanup tail, so the download never
+    // reached the running-list removal and the queue stalled with items still
+    // waiting. Marshal to the EDT instead -- that is the thread that actually
+    // owns these components, and it is not the pool.
     @Override
     public int getSlots() {
-        try {
-            return (int) (MiscTools.futureRun((Callable) getSlots_spinner()::getValue).get());
-        } catch (InterruptedException ex) {
-            Logger.getLogger(DownloadView.class.getName()).log(Level.SEVERE, null, ex);
-        } catch (ExecutionException ex) {
-            Logger.getLogger(DownloadView.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        return 0;
+        final int[] out = {0};
+
+        MiscTools.GUIRun(() -> out[0] = (int) getSlots_spinner().getValue());
+
+        return out[0];
     }
 
     public boolean isKeepTempFileSelected() {
 
-        try {
-            return (boolean) (MiscTools.futureRun((Callable) getKeep_temp_checkbox()::isSelected).get());
-        } catch (InterruptedException ex) {
-            Logger.getLogger(DownloadView.class.getName()).log(Level.SEVERE, null, ex);
-        } catch (ExecutionException ex) {
-            Logger.getLogger(DownloadView.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        return false;
+        final boolean[] out = {false};
+
+        MiscTools.GUIRun(() -> out[0] = getKeep_temp_checkbox().isSelected());
+
+        return out[0];
     }
 
     // Variables declaration - do not modify//GEN-BEGIN:variables

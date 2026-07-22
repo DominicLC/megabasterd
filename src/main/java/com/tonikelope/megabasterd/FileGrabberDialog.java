@@ -980,7 +980,14 @@ public class FileGrabberDialog extends javax.swing.JDialog {
 
             _total_space = 0L;
 
-            DefaultTreeModel tree_model = (DefaultTreeModel) (MiscTools.futureRun((Callable) file_tree::getModel).get());
+            // Not futureRun(...).get(): _genFileList runs on a THREAD_POOL
+            // thread, and blocking a pool thread on another pool task can
+            // deadlock the bounded pool. Read the model on the EDT instead.
+            final DefaultTreeModel[] tm = {null};
+
+            MiscTools.GUIRun(() -> tm[0] = (DefaultTreeModel) file_tree.getModel());
+
+            DefaultTreeModel tree_model = tm[0];
 
             DefaultMutableTreeNode root = (DefaultMutableTreeNode) tree_model.getRoot();
 
@@ -1017,9 +1024,7 @@ public class FileGrabberDialog extends javax.swing.JDialog {
             MiscTools.GUIRun(() -> {
                 total_file_size_label.setText("[" + formatBytes(_total_space) + "]");
             });
-        } catch (InterruptedException ex) {
-            Logger.getLogger(FileGrabberDialog.class.getName()).log(Level.SEVERE, null, ex);
-        } catch (ExecutionException ex) {
+        } catch (RuntimeException ex) {
             Logger.getLogger(FileGrabberDialog.class.getName()).log(Level.SEVERE, null, ex);
         }
 

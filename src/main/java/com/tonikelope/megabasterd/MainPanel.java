@@ -130,6 +130,52 @@ public final class MainPanel {
         THREAD_POOL = tpe;
     }
 
+    /**
+     * Grow THREAD_POOL so it can actually hold every concurrent transfer the
+     * user has configured.
+     *
+     * Each running download parks TWO pool threads for its whole lifetime:
+     * {@code Download.run()} itself (blocked in secureWait until its chunk
+     * workers finish) and its progress watchdog. Uploads are the same. The
+     * chunk workers do NOT come from here -- each transfer has its own cached
+     * pool -- so 2/transfer plus headroom for the always-on background loops
+     * (both managers, both speed meters, the throttler supervisor, clipboard
+     * spy, memory monitor) and transient work (provisioning, auto-retry
+     * countdowns, dialogs) is the real requirement.
+     *
+     * With the flat {@link #GLOBAL_THREAD_POOL_MAX} of 64 introduced in #773,
+     * a max_downloads of 40 needed 80+ threads and could not get them: pending
+     * {@code Download.run()} tasks sat in the queue while already counted as
+     * "running", so the queue stalled with transfers waiting. Never shrink
+     * below the 64 floor.
+     */
+    public static void resizeGlobalThreadPool(int max_dl, int max_ul) {
+
+        int needed = 2 * Math.max(0, max_dl) + 2 * Math.max(0, max_ul) + 32;
+
+        int size = Math.max(GLOBAL_THREAD_POOL_MAX, needed);
+
+        java.util.concurrent.ThreadPoolExecutor tpe = (java.util.concurrent.ThreadPoolExecutor) THREAD_POOL;
+
+        if (tpe.getMaximumPoolSize() == size) {
+            return;
+        }
+
+        // setCorePoolSize > maximumPoolSize throws, so grow max first and
+        // shrink core first.
+        if (size > tpe.getMaximumPoolSize()) {
+            tpe.setMaximumPoolSize(size);
+            tpe.setCorePoolSize(size);
+        } else {
+            tpe.setCorePoolSize(size);
+            tpe.setMaximumPoolSize(size);
+        }
+
+        Logger.getLogger(MainPanel.class.getName()).log(Level.INFO,
+                "Global THREAD_POOL sized to {0} (max_dl={1}, max_ul={2})",
+                new Object[]{size, max_dl, max_ul});
+    }
+
     private static java.util.concurrent.ThreadFactory _megabasterdDaemonThreadFactory() {
         return new java.util.concurrent.ThreadFactory() {
             private final java.util.concurrent.atomic.AtomicLong counter = new java.util.concurrent.atomic.AtomicLong(1);
@@ -464,6 +510,9 @@ public final class MainPanel {
     private boolean _use_slots_down, _limit_download_speed, _limit_upload_speed, _use_mega_account_down, _init_paused, _debug_file;
     private String _mega_account_down;
     private String _default_download_path;
+    // Folder picked in the last accepted new-download dialog. Written from the
+    // EDT, read when building the next dialog, so it must be volatile.
+    private volatile String _last_download_path;
     private boolean _use_custom_chunks_dir;
     private String _custom_chunks_dir;
     private HashMap<String, Object> _mega_accounts;
@@ -990,6 +1039,14 @@ public final class MainPanel {
         return _default_download_path;
     }
 
+    public String getLast_download_path() {
+        return _last_download_path;
+    }
+
+    public void setLast_download_path(String last_download_path) {
+        _last_download_path = last_download_path;
+    }
+
     public HashMap<String, Object> getMega_accounts() {
         return _mega_accounts;
     }
@@ -1119,10 +1176,21 @@ public final class MainPanel {
             _max_ul = Upload.SIM_TRANSFERENCES_DEFAULT;
         }
 
+        resizeGlobalThreadPool(_max_dl, _max_ul);
+
         _default_download_path = selectSettingValue("default_down_dir");
 
         if (_default_download_path == null) {
             _default_download_path = ".";
+        }
+
+        // The new-download dialog reopens on the folder last used instead of
+        // resetting to the configured default every time. SettingsDialog
+        // clears this whenever the default itself is changed.
+        _last_download_path = selectSettingValue("last_down_dir");
+
+        if (_last_download_path == null) {
+            _last_download_path = _default_download_path;
         }
 
         String limit_dl_speed = selectSettingValue("limit_download_speed");

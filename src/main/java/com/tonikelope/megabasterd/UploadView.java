@@ -691,16 +691,15 @@ public class UploadView extends javax.swing.JPanel implements TransferenceView {
         }
     }
 
+    // See the comment on DownloadView.getSlots: futureRun(...).get() blocks a
+    // THREAD_POOL thread waiting on the THREAD_POOL and deadlocks the pool.
     @Override
     public int getSlots() {
-        try {
-            return (int) (MiscTools.futureRun((Callable) getSlots_spinner()::getValue).get());
-        } catch (InterruptedException ex) {
-            Logger.getLogger(UploadView.class.getName()).log(Level.SEVERE, null, ex);
-        } catch (ExecutionException ex) {
-            Logger.getLogger(UploadView.class.getName()).log(Level.SEVERE, null, ex);
-        }
-        return 0;
+        final int[] out = {0};
+
+        MiscTools.GUIRun(() -> out[0] = (int) getSlots_spinner().getValue());
+
+        return out[0];
     }
 
     // Variables declaration - do not modify//GEN-BEGIN:variables

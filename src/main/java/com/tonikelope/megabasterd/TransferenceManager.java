@@ -781,18 +781,29 @@ abstract public class TransferenceManager implements Runnable, SecureSingleThrea
 
                 THREAD_POOL.execute(() -> {
 
-                    if (!getTransference_remove_queue().isEmpty()) {
+                    // try/finally: these four phase flags are set to true on the
+                    // manager thread BEFORE the task is submitted, and cleared
+                    // only in here. If the task dies on an unchecked exception
+                    // the flag latches true forever and run() silently stops
+                    // scheduling that phase for the rest of the session -- the
+                    // queue then sits full of waiting transfers doing nothing
+                    // until the app is restarted.
+                    try {
+                        if (!getTransference_remove_queue().isEmpty()) {
 
-                        ArrayList<Transference> transferences = new ArrayList(getTransference_remove_queue());
+                            ArrayList<Transference> transferences = new ArrayList(getTransference_remove_queue());
 
-                        getTransference_remove_queue().clear();
+                            getTransference_remove_queue().clear();
 
-                        remove(transferences.toArray(new Transference[transferences.size()]));
+                            remove(transferences.toArray(new Transference[transferences.size()]));
+                        }
+                    } catch (Throwable t) {
+                        LOG.log(SEVERE, "remove phase failed", t);
+                    } finally {
+                        setRemoving_transferences(false);
+
+                        secureNotify();
                     }
-
-                    setRemoving_transferences(false);
-
-                    secureNotify();
                 });
             }
 
@@ -807,6 +818,7 @@ abstract public class TransferenceManager implements Runnable, SecureSingleThrea
 
                 THREAD_POOL.execute(() -> {
 
+                    try {
                     while (!getTransference_preprocess_queue().isEmpty() && !_main_panel.isExit()) {
                         Runnable run = getTransference_preprocess_queue().poll();
 
@@ -849,13 +861,17 @@ abstract public class TransferenceManager implements Runnable, SecureSingleThrea
                         }
                     }
 
-                    setPreprocessing_transferences(false);
+                    } catch (Throwable t) {
+                        LOG.log(SEVERE, "preprocess phase failed", t);
+                    } finally {
+                        setPreprocessing_transferences(false);
 
-                    synchronized (getTransference_preprocess_queue()) {
-                        getTransference_preprocess_queue().notifyAll();
+                        synchronized (getTransference_preprocess_queue()) {
+                            getTransference_preprocess_queue().notifyAll();
+                        }
+
+                        secureNotify();
                     }
-
-                    secureNotify();
                 });
             }
 
@@ -868,6 +884,8 @@ abstract public class TransferenceManager implements Runnable, SecureSingleThrea
                 THREAD_POOL.execute(() -> {
 
                     ExecutorService executor = Executors.newFixedThreadPool(MAX_PROVISION_WORKERS);
+
+                    try {
 
                     BoundedExecutor bounded_executor = new BoundedExecutor(executor, MAX_PROVISION_WORKERS);
 
@@ -961,9 +979,14 @@ abstract public class TransferenceManager implements Runnable, SecureSingleThrea
 
                     }
 
-                    setSort_wait_start_queue(true);
-                    setProvisioning_transferences(false);
-                    secureNotify();
+                    } catch (Throwable t) {
+                        LOG.log(SEVERE, "provision phase failed", t);
+                    } finally {
+                        executor.shutdownNow();
+                        setSort_wait_start_queue(true);
+                        setProvisioning_transferences(false);
+                        secureNotify();
+                    }
                 });
 
             }
@@ -974,6 +997,7 @@ abstract public class TransferenceManager implements Runnable, SecureSingleThrea
 
                 THREAD_POOL.execute(() -> {
 
+                    try {
                     while (!_main_panel.isExit() && !_paused_all && (!getTransference_waitstart_queue().isEmpty() || !getTransference_waitstart_aux_queue().isEmpty()) && getTransference_running_list().size() < _max_running_trans) {
 
                         synchronized (_transference_queue_sort_lock) {
@@ -1007,13 +1031,17 @@ abstract public class TransferenceManager implements Runnable, SecureSingleThrea
                         }
                     }
 
-                    synchronized (getWait_queue_lock()) {
-                        getWait_queue_lock().notifyAll();
+                    } catch (Throwable t) {
+                        LOG.log(SEVERE, "start phase failed", t);
+                    } finally {
+                        synchronized (getWait_queue_lock()) {
+                            getWait_queue_lock().notifyAll();
+                        }
+
+                        setStarting_transferences(false);
+
+                        secureNotify();
                     }
-
-                    setStarting_transferences(false);
-
-                    secureNotify();
                 });
             }
 
