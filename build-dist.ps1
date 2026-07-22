@@ -34,12 +34,27 @@ if (Test-Path $distPath) {
     Write-Host "==> Removed." -ForegroundColor Green
 }
 
-# Step 4: jpackage
+# Step 4: Stage the jpackage input directory
+# jpackage --input packages EVERY file in the directory it is given, so
+# pointing it at jar\ bundles any stray JAR left lying there (a spare
+# upstream/rollback build silently doubled the app-image size). Stage a
+# directory holding only the main JAR instead. It lives under target\ so
+# `mvn clean` on the next run wipes it.
+$stagePath = "$PSScriptRoot\target\jpackage-input"
+Write-Host "==> Staging jpackage input at $stagePath..." -ForegroundColor Cyan
+if (Test-Path $stagePath) {
+    Remove-Item $stagePath -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $stagePath | Out-Null
+Copy-Item "$PSScriptRoot\jar\MegaBasterd.jar" $stagePath -Force
+Write-Host "==> Staged $((Get-ChildItem $stagePath).Count) file(s)." -ForegroundColor Green
+
+# Step 5: jpackage
 Write-Host "==> Running jpackage..." -ForegroundColor Cyan
 jpackage `
   --type app-image `
   --name MegaBasterd `
-  --input "$PSScriptRoot\jar" `
+  --input $stagePath `
   --main-jar MegaBasterd.jar `
   --main-class com.tonikelope.megabasterd.MainPanel `
   --runtime-image "$PSScriptRoot\jre" `
