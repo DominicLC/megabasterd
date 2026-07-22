@@ -11,7 +11,6 @@ package com.tonikelope.megabasterd;
 
 import static com.tonikelope.megabasterd.DBTools.*;
 import static com.tonikelope.megabasterd.MiscTools.*;
-import com.tonikelope.megabasterd.SmartMegaProxyManager.SmartProxyAuthenticator;
 import static com.tonikelope.megabasterd.Transference.*;
 import java.awt.AWTException;
 import java.awt.Color;
@@ -32,7 +31,6 @@ import java.io.IOException;
 import java.io.PrintStream;
 import static java.lang.Integer.parseInt;
 import static java.lang.System.exit;
-import java.net.Authenticator;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -48,7 +46,6 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
-import static java.util.concurrent.Executors.newCachedThreadPool;
 import java.util.logging.Level;
 import static java.util.logging.Level.SEVERE;
 import java.util.logging.Logger;
@@ -69,7 +66,7 @@ import javax.swing.UIManager;
  */
 public final class MainPanel {
 
-    public static final String VERSION = "8.51";
+    public static final String VERSION = "8.57";
     public static final boolean FORCE_SMART_PROXY = false; //TRUE FOR DEBUGING SMART PROXY
     public static final int THROTTLE_SLICE_SIZE = 16 * 1024;
     public static final int DEFAULT_BYTE_BUFFER_SIZE = 16 * 1024;
@@ -84,7 +81,54 @@ public final class MainPanel {
     public static final float ZOOM_FACTOR = 0.8f;
     public static final String DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:61.0) Gecko/20100101 Firefox/61.0";
     public static final String ICON_FILE = "/images/pica_roja_big.png";
-    public static final ExecutorService THREAD_POOL = newCachedThreadPool(_megabasterdDaemonThreadFactory());
+    /**
+     * Max worker threads in the global pool. The pool used to be
+     * {@code newCachedThreadPool()} (unbounded) which under heavy bursts
+     * (several transferences provisioning + smart-proxy refresh + per-slot
+     * managers + streamer + tray watchdog) routinely peaked at 100-200 live
+     * threads. Each thread carries a ~512 KB-1 MB native stack, so that
+     * burst alone added 50-200 MB of RSS that no GC can reclaim -- the
+     * memory growth that #773 complained about.
+     *
+     * 64 leaves ample headroom for the worst real-world burst observed (a
+     * handful of managers + supervisors + ~30 per-transfer workers; the
+     * per-Download chunk workers live in each Download's *own* thread pool,
+     * not in this one). Tasks submitted past the active cap queue up on the
+     * unbounded LinkedBlockingQueue and start within microseconds as soon
+     * as a worker frees up. No work is dropped. (#773)
+     *
+     * NOTE -- 8.53 first wired this as {@code ThreadPoolExecutor(0, 64,
+     * LinkedBlockingQueue)}, which silently froze every task after the
+     * first one. The textbook trap: with corePoolSize=0 and an unbounded
+     * queue, {@link java.util.concurrent.ThreadPoolExecutor#execute}
+     * always prefers queuing over creating a new worker once any worker
+     * exists, AND it only spawns a recovery worker after queuing when
+     * {@code workerCountOf == 0}. So the first task (the
+     * {@code while (!_exit)} memory monitor below) grabs the lone worker
+     * forever, every later submit (including resumeDownloads /
+     * resumeUploads / smart-proxy refresh / watchdog accept loop /
+     * megacrypter reverse) enqueues and never runs -- hence the
+     * "Checking previous downloads..." indicator that stayed forever in
+     * #776, even on a clean install with an empty queue. Fix: pre-size
+     * corePoolSize == maxPoolSize and turn on
+     * {@code allowCoreThreadTimeOut} so the pool grows up to 64 workers
+     * on demand and still lets idle workers die after keepAlive. (#776)
+     */
+    public static final int GLOBAL_THREAD_POOL_MAX = 64;
+    public static final ExecutorService THREAD_POOL;
+
+    static {
+        java.util.concurrent.ThreadPoolExecutor tpe = new java.util.concurrent.ThreadPoolExecutor(
+                GLOBAL_THREAD_POOL_MAX, GLOBAL_THREAD_POOL_MAX,
+                60L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.LinkedBlockingQueue<>(),
+                _megabasterdDaemonThreadFactory());
+        // Without this, core threads stay alive forever -- which means once
+        // the pool has grown under a burst it stays at that RSS cost even
+        // when idle, defeating the #773 memory-bound goal.
+        tpe.allowCoreThreadTimeOut(true);
+        THREAD_POOL = tpe;
+    }
 
     private static java.util.concurrent.ThreadFactory _megabasterdDaemonThreadFactory() {
         return new java.util.concurrent.ThreadFactory() {
@@ -104,21 +148,60 @@ public final class MainPanel {
         };
     }
     public static volatile String MEGABASTERD_HOME_DIR = System.getProperty("user.home");
-    private static String _proxy_host;
-    private static int _proxy_port;
-    private static boolean _use_proxy;
-    private static String _proxy_user;
-    private static String _proxy_pass;
-    private static boolean _use_smart_proxy;
-    private static boolean _run_command;
-    private static String _run_command_path;
+    // Proxy-routing config + the SmartProxy manager handle are read by
+    // long-lived worker threads (ChunkDownloader / ChunkDownloaderMono /
+    // MegaAPI.RAW_REQUEST) that may have been started BEFORE the user toggles
+    // any of these in Settings at runtime. They are written on the EDT
+    // (loadUserSettings / setProxy_manager). Without `volatile` there is NO
+    // happens-before edge between the EDT write and an already-running
+    // worker's read, so the worker can (a) keep observing the stale cached
+    // value forever or (b) have the JIT hoist the read out of its hot loop.
+    // That is the root cause of #778: enabling SmartProxy at runtime never
+    // resumed downloads (the workers kept reading _use_smart_proxy==false /
+    // _proxy_manager==null and never entered the proxy-routing branch), while
+    // a restart with SmartProxy pre-enabled worked because the workers were
+    // then created AFTER the writes (Thread.start() = happens-before). Affects
+    // EVERY proxy type, not just authenticated ones. (#778)
+    private static volatile String _proxy_host;
+    private static volatile int _proxy_port;
+    private static volatile boolean _use_proxy;
+    private static volatile String _proxy_user;
+    private static volatile String _proxy_pass;
+    private static volatile boolean _use_smart_proxy;
+    // volatile: same #778-class race as the proxy fields. _run_command is read
+    // in the ChunkDownloader / ChunkDownloaderMono hot loop on every 509
+    // (MainPanel.isRun_command()) and the *_path / *_finish fields are read by
+    // the TransferenceManager status loop, all on worker/background threads
+    // that may predate the EDT write in loadUserSettings(). Without volatile an
+    // already-running worker may never observe a runtime enable of the
+    // post-quota / post-finish command. (#778)
+    private static volatile boolean _run_command;
+    private static volatile String _run_command_path;
+    // #774 -- two independent post-finish commands, one per queue. Settings
+    // and triggers are fully independent of the legacy "MEGA download limit
+    // reached" command above and of each other; if downloads and uploads
+    // both empty at the same time both commands fire concurrently.
+    private static volatile boolean _run_command_dl_finish;
+    private static volatile String _run_command_dl_finish_path;
+    private static volatile boolean _run_command_ul_finish;
+    private static volatile String _run_command_ul_finish_path;
     private static String _font;
-    private static SmartMegaProxyManager _proxy_manager;
+    // volatile: see the proxy-config block above -- read by already-running
+    // worker threads, written on the EDT at runtime-enable. (#778)
+    private static volatile SmartMegaProxyManager _proxy_manager;
     private static volatile String _language;
     private static String _new_version;
     private static Boolean _resume_uploads;
     private static Boolean _resume_downloads;
     public static volatile long LAST_EXTERNAL_COMMAND_TIMESTAMP;
+    // #774 -- separate cooldown timestamps so neither command can starve the
+    // others. Each post-finish command has its own RUN_COMMAND_TIME-style
+    // guard; in practice the natural "queue must transition from non-empty
+    // to empty" gate prevents accidental refire much earlier than the
+    // timestamp would, but we keep the same belt-and-braces pattern as
+    // run_external_command() to stay consistent.
+    public static volatile long LAST_DL_FINISH_COMMAND_TIMESTAMP;
+    public static volatile long LAST_UL_FINISH_COMMAND_TIMESTAMP;
 
     /**
      * Shared cached public IP for the 509-recovery / VPN-aware retry path.
@@ -281,6 +364,23 @@ public final class MainPanel {
         return _run_command_path;
     }
 
+    // #774 -- accessors for the two post-finish commands.
+    public static boolean isRun_command_dl_finish() {
+        return _run_command_dl_finish;
+    }
+
+    public static String getRun_command_dl_finish_path() {
+        return _run_command_dl_finish_path;
+    }
+
+    public static boolean isRun_command_ul_finish() {
+        return _run_command_ul_finish;
+    }
+
+    public static String getRun_command_ul_finish_path() {
+        return _run_command_ul_finish_path;
+    }
+
     public static String getFont() {
         return _font;
     }
@@ -389,6 +489,9 @@ public final class MainPanel {
         _exit = false;
 
         LAST_EXTERNAL_COMMAND_TIMESTAMP = -1;
+        // #774
+        LAST_DL_FINISH_COMMAND_TIMESTAMP = -1;
+        LAST_UL_FINISH_COMMAND_TIMESTAMP = -1;
 
         _restart = false;
 
@@ -637,10 +740,12 @@ public final class MainPanel {
             MainPanel tthis = this;
 
             THREAD_POOL.execute(() -> {
-                Authenticator.setDefault(new SmartProxyAuthenticator());
-
                 // #URL extraction is now done inside SmartMegaProxyManager
                 // itself so multiple sources can be aggregated. (#753)
+                // Authenticator.setDefault() now happens inside the
+                // SmartMegaProxyManager constructor so the startup path and the
+                // runtime-enable path (MainPanelView) install it identically.
+                // (#778)
                 _proxy_manager = new SmartMegaProxyManager(tthis);
             });
 
@@ -656,9 +761,31 @@ public final class MainPanel {
             getView().getGlobal_speed_up_label().setForeground(_limit_upload_speed ? new Color(255, 0, 0) : new Color(0, 128, 255));
         });
 
+        // Auto-GC hint cooldown for the memory monitor below. Wakes the JVM
+        // to reclaim heap when usage crosses
+        // FORCE_GARBAGE_COLLECTION_MAX_MEMORY_PERCENT of -Xmx but at most
+        // once per AUTO_GC_COOLDOWN_MS, so we don't pin a core stop-the-world
+        // GCing every 2 s during heavy chunk decryption. (#773)
+        final long AUTO_GC_COOLDOWN_MS = 60_000L;
+        // Make the RAM label a manual "release unused JVM RAM" trigger -- the
+        // best the JVM exposes is System.gc() (a hint, not a directive), but
+        // on G1/ZGC it does prompt heap shrink + return-to-OS. (#773)
+        MiscTools.GUIRun(() -> {
+            JLabel ml = _view.getMemory_status();
+            ml.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+            ml.setToolTipText(I18n.tr("ui.statusbar.jvm_ram.tooltip"));
+            ml.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent e) {
+                    System.gc();
+                }
+            });
+        });
+
         THREAD_POOL.execute(() -> {
             Runtime instance = Runtime.getRuntime();
             String last_text = null;
+            long last_auto_gc_ms = 0L;
             while (!_exit) {
                 long used_memory = instance.totalMemory() - instance.freeMemory();
                 long max_memory = instance.maxMemory();
@@ -669,6 +796,18 @@ public final class MainPanel {
                     last_text = text;
                     final String t = text;
                     MiscTools.GUIRun(() -> _view.getMemory_status().setText(t));
+                }
+                // (#773) Hint the JVM to GC when usage crosses the threshold.
+                // System.gc() is advisory but the default G1 collector does
+                // honour it and will, after a couple of cycles, return free
+                // regions to the OS -- which is the user-visible reduction
+                // people complain about. Cooldown prevents thrashing.
+                long now = System.currentTimeMillis();
+                if (max_memory > 0
+                        && (double) used_memory / (double) max_memory > FORCE_GARBAGE_COLLECTION_MAX_MEMORY_PERCENT
+                        && now - last_auto_gc_ms > AUTO_GC_COOLDOWN_MS) {
+                    last_auto_gc_ms = now;
+                    System.gc();
                 }
                 try {
                     Thread.sleep(2000);
@@ -1099,6 +1238,30 @@ public final class MainPanel {
             LAST_EXTERNAL_COMMAND_TIMESTAMP = -1;
         }
 
+        // #774 -- two independent post-queue-finish commands. Same pattern
+        // as the 509 command above: yes/no flag + path. Path-change wipes
+        // the per-command cooldown timestamp so the user can test the new
+        // command right away.
+        String run_command_dl_finish_string = DBTools.selectSettingValue("run_command_dl_finish");
+        if (run_command_dl_finish_string != null) {
+            _run_command_dl_finish = run_command_dl_finish_string.equals("yes");
+        }
+        String old_run_command_dl_finish_path = _run_command_dl_finish_path;
+        _run_command_dl_finish_path = DBTools.selectSettingValue("run_command_dl_finish_path");
+        if (_run_command_dl_finish && old_run_command_dl_finish_path != null && !old_run_command_dl_finish_path.equals(_run_command_dl_finish_path)) {
+            LAST_DL_FINISH_COMMAND_TIMESTAMP = -1;
+        }
+
+        String run_command_ul_finish_string = DBTools.selectSettingValue("run_command_ul_finish");
+        if (run_command_ul_finish_string != null) {
+            _run_command_ul_finish = run_command_ul_finish_string.equals("yes");
+        }
+        String old_run_command_ul_finish_path = _run_command_ul_finish_path;
+        _run_command_ul_finish_path = DBTools.selectSettingValue("run_command_ul_finish_path");
+        if (_run_command_ul_finish && old_run_command_ul_finish_path != null && !old_run_command_ul_finish_path.equals(_run_command_ul_finish_path)) {
+            LAST_UL_FINISH_COMMAND_TIMESTAMP = -1;
+        }
+
         String use_megacrypter_reverse = selectSettingValue("megacrypter_reverse");
 
         if (use_megacrypter_reverse != null) {
@@ -1164,28 +1327,68 @@ public final class MainPanel {
         if (_run_command && (LAST_EXTERNAL_COMMAND_TIMESTAMP == -1 || LAST_EXTERNAL_COMMAND_TIMESTAMP + RUN_COMMAND_TIME * 1000 < System.currentTimeMillis())) {
 
             if (_run_command_path != null && !_run_command_path.equals("")) {
-                try {
-                    String cmd = _run_command_path;
-                    java.io.File f = new java.io.File(cmd);
-                    java.util.List<String> argv;
-                    if (f.exists()) {
-                        // Treat the whole setting as a single binary path; this
-                        // makes "C:\Program Files\foo\bar.exe" work without the
-                        // old whitespace-split bug. If you need args, wrap in a
-                        // .bat/.sh script.
-                        argv = java.util.Collections.singletonList(cmd);
-                    } else {
-                        // Backwards-compat: command isn't a real file, fall back
-                        // to legacy whitespace-token splitting so existing
-                        // "command arg1 arg2" configs keep working.
-                        argv = java.util.Arrays.asList(cmd.trim().split("\\s+"));
-                    }
-                    new ProcessBuilder(argv).inheritIO().start();
-                } catch (IOException ex) {
-                    Logger.getLogger(MainPanel.class.getName()).log(Level.SEVERE, ex.getMessage());
-                }
-
+                _spawnExternalProcess(_run_command_path);
                 LAST_EXTERNAL_COMMAND_TIMESTAMP = System.currentTimeMillis();
+            }
+        }
+    }
+
+    /**
+     * Shared spawn helper for the three external-command paths
+     * ({@link #run_external_command}, {@link #run_dl_finish_command},
+     * {@link #run_ul_finish_command}). Mirrors the old inline behaviour
+     * exactly: if the configured value is a real file, treat it as a
+     * single argv[0]; otherwise fall back to legacy whitespace-token
+     * splitting so existing "command arg1 arg2" configs keep working.
+     * Output inherits stdout/stderr; failures are logged and swallowed
+     * so the trigger path is never disturbed. (#774 -- factored out so
+     * the three call-sites stay in lockstep.)
+     */
+    private static void _spawnExternalProcess(String configured_cmd) {
+        try {
+            String cmd = configured_cmd;
+            java.io.File f = new java.io.File(cmd);
+            java.util.List<String> argv;
+            if (f.exists()) {
+                argv = java.util.Collections.singletonList(cmd);
+            } else {
+                argv = java.util.Arrays.asList(cmd.trim().split("\\s+"));
+            }
+            new ProcessBuilder(argv).inheritIO().start();
+        } catch (IOException ex) {
+            Logger.getLogger(MainPanel.class.getName()).log(Level.SEVERE, ex.getMessage());
+        }
+    }
+
+    /**
+     * #774 -- fires the user's "downloads queue finished" command. Cooldown
+     * is independent of the 509 command and of the upload-finish command;
+     * if all three trigger simultaneously, all three run concurrently. The
+     * natural "queue must transition from non-empty to empty" gate in
+     * {@link TransferenceManager} already prevents accidental refire on
+     * the same finished batch, but we keep the RUN_COMMAND_TIME timestamp
+     * guard for defence-in-depth.
+     */
+    public static synchronized void run_dl_finish_command() {
+        if (_run_command_dl_finish && (LAST_DL_FINISH_COMMAND_TIMESTAMP == -1 || LAST_DL_FINISH_COMMAND_TIMESTAMP + RUN_COMMAND_TIME * 1000 < System.currentTimeMillis())) {
+            if (_run_command_dl_finish_path != null && !_run_command_dl_finish_path.equals("")) {
+                _spawnExternalProcess(_run_command_dl_finish_path);
+                LAST_DL_FINISH_COMMAND_TIMESTAMP = System.currentTimeMillis();
+            }
+        }
+    }
+
+    /**
+     * #774 -- fires the user's "uploads queue finished" command. See
+     * {@link #run_dl_finish_command} for the cooldown / concurrency
+     * semantics; the upload-side variant follows the exact same pattern
+     * with its own state and is wired from {@link UploadManager}.
+     */
+    public static synchronized void run_ul_finish_command() {
+        if (_run_command_ul_finish && (LAST_UL_FINISH_COMMAND_TIMESTAMP == -1 || LAST_UL_FINISH_COMMAND_TIMESTAMP + RUN_COMMAND_TIME * 1000 < System.currentTimeMillis())) {
+            if (_run_command_ul_finish_path != null && !_run_command_ul_finish_path.equals("")) {
+                _spawnExternalProcess(_run_command_ul_finish_path);
+                LAST_UL_FINISH_COMMAND_TIMESTAMP = System.currentTimeMillis();
             }
         }
     }
