@@ -1,6 +1,29 @@
 $distPath = "$PSScriptRoot\dist\MegaBasterd"
 
+# Cmdlet failures abort the script instead of limping on. Note: native tools
+# (mvn, jpackage) still won't throw on non-zero exit under this preference, so
+# the explicit $LASTEXITCODE checks after each of them below are still required.
+$ErrorActionPreference = 'Stop'
+
 Write-Host ">> [bird] Cracking my knuckles. Let's build a MegaBasterd..." -ForegroundColor Cyan
+
+# Step 0: Preflight. Fail fast and loud if a prerequisite is missing, instead of
+# discovering it as a cryptic error after a full Maven build (a missing jre\, for
+# example, used to only blow up in the very last jpackage step).
+Write-Host ">> [bird] Frisking the toolbox before we start..." -ForegroundColor Cyan
+$missing = @()
+if (-not (Get-Command mvn -ErrorAction SilentlyContinue))      { $missing += "mvn (Maven) isn't on PATH." }
+if (-not (Get-Command jpackage -ErrorAction SilentlyContinue)) { $missing += "jpackage isn't on PATH (need a JDK 14+ bin\ on PATH)." }
+if (-not (Test-Path "$PSScriptRoot\pom.xml"))                  { $missing += "pom.xml is missing at $PSScriptRoot." }
+if (-not (Test-Path "$PSScriptRoot\jre"))                      { $missing += "jre\ runtime-image is missing -- run the jlink step from the README first." }
+$icon = "$PSScriptRoot\src\main\resources\images\pica_roja_big.ico"
+if (-not (Test-Path $icon))                                    { $missing += "app icon is missing at $icon." }
+if ($missing.Count -gt 0) {
+    Write-Host ">> [bird] Can't build like this. Sort these out first:" -ForegroundColor Red
+    $missing | ForEach-Object { Write-Host "     - $_" -ForegroundColor Red }
+    exit 1
+}
+Write-Host ">> [bird] Toolbox checks out. Everything I need is here." -ForegroundColor Green
 
 # Step 1: Maven build
 Write-Host ">> [bird] Feeding the sources to Maven. This is the boring bit, grab a coffee." -ForegroundColor Cyan
