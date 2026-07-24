@@ -29,7 +29,24 @@ jlink `
   --output jre --strip-debug --compress=zip-6 --no-header-files --no-man-pages
 ```
 
+**Sync with upstream + rebuild (one shot):**
+```powershell
+.\update-and-build.ps1
+```
+Merges `upstream/master` into the current branch, runs `build-dist.ps1`, and downloads the official upstream release JAR into `upstream-build/`. Flags: `-OnlyIfChanged`, `-SkipUpdate`, `-SkipBuild`, `-SkipUpstreamJar`. On a merge conflict it stops for manual resolution; re-run with `-SkipUpdate` afterward.
+
 There are no automated tests in this project.
+
+## Continuous integration
+
+`.github/workflows/build.yml` runs `mvn -B -ntp clean package -DskipTests` on every push and pull request to `master` (Ubuntu, Temurin JDK 17) and uploads the fat JAR as an artifact. It is a compile-breakage guard — most useful right after an upstream merge. Packaging (jlink/jpackage → `.exe`) is Windows-local and intentionally not part of CI.
+
+## Upstream-merge hygiene
+
+This is a fork of `tonikelope/megabasterd`, kept current via `update-and-build.ps1`. To keep upstream merges conflict-free:
+
+- **Never renormalize line endings.** Upstream ships *mixed* endings — many files are CRLF, some are LF, each matching upstream per-file. A file that flips CRLF↔LF conflicts against upstream on every future merge. Two guardrails enforce this: `.gitattributes` sets `* -text` (Git does no EOL conversion at all, so nothing flips regardless of `core.autocrlf`), and `.editorconfig` deliberately omits `end_of_line` so editors don't flip endings on save. **Do not** change `.gitattributes` to `text=auto`/`text` — that would renormalize everything to LF and defeat the purpose.
+- **Prefer new files and fork-owned files** (build scripts, `.github/`, docs) for improvements — they never collide. Edits to upstream-owned Java/pom files should stay small and localized.
 
 ## Version
 

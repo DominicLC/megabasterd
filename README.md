@@ -1,6 +1,6 @@
 <h1>MegaBasterd</h1>
 
-[![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://GitHub.com/Naereen/StrapDown.js/graphs/commit-activity) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://GitHub.com/Naereen/StrapDown.js/graphs/commit-activity) [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) [![build](https://github.com/DominicLC/megabasterd/actions/workflows/build.yml/badge.svg)](https://github.com/DominicLC/megabasterd/actions/workflows/build.yml)
 
 <p align="center"><i>"If it compiles, it's good; if it boots up, it's perfect." (Linus Torvalds)</i></p>
 <p align="center"><a href="https://github.com/tonikelope/megabasterd/releases/latest" target="_blank"><img src="https://raw.githubusercontent.com/tonikelope/megabasterd/master/src/main/resources/images/mbasterd_logo_git.png"></a></p>
@@ -26,7 +26,7 @@
 ## Building from source (Windows)
 
 **Requirements:**
-- JDK 14+ (with `jpackage` and `jlink` on PATH)
+- JDK 17+ (with `jpackage` and `jlink` on PATH — the packaged app runs with `--enable-native-access`, a JDK 17+ option)
 - Maven
 
 **1. Generate the bundled JRE (one-time)**
@@ -53,3 +53,18 @@ This will compile the source, copy the JAR, and produce a self-contained executa
 ```
 dist\MegaBasterd\MegaBasterd.exe
 ```
+
+**Staying in sync with upstream**
+
+To pull the latest changes from `tonikelope/megabasterd`, rebuild, and grab the official
+upstream release JAR for reference in one shot:
+
+```powershell
+.\update-and-build.ps1
+```
+
+It merges `upstream/master` into the current branch, runs `build-dist.ps1`, and downloads the
+official release binary into `upstream-build\`. Use `-OnlyIfChanged` to rebuild only when the
+merge actually pulled in new commits, or `-SkipUpdate` / `-SkipBuild` / `-SkipUpstreamJar` to
+run individual stages. On a merge conflict it stops and leaves the tree for you to resolve, then
+re-run with `-SkipUpdate`. Run `Get-Help .\update-and-build.ps1 -Detailed` for the full options.
