@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # JDK 17 compiles the pom's source/target=1.8 bytecode cleanly and stays
+      # ahead of the -source 8 removal in newer JDKs. Packaging (jlink/jpackage)
+      # is Windows-local and intentionally out of scope here -- CI only guards
+      # against compile breakage, which is what bites right after an upstream merge.
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build (mvn clean package)
+        run: mvn -B -ntp clean package -DskipTests
+
+      - name: Upload fat JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: MegaBasterd-jar
+          path: target/*-jar-with-dependencies.jar
+          if-no-files-found: error
