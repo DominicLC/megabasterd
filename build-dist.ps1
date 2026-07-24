@@ -1,37 +1,37 @@
 $distPath = "$PSScriptRoot\dist\MegaBasterd"
 
-Write-Host "==> Building MegaBasterd distribution..." -ForegroundColor Cyan
+Write-Host ">> [bird] Cracking my knuckles. Let's build a MegaBasterd..." -ForegroundColor Cyan
 
 # Step 1: Maven build
-Write-Host "==> Running mvn package..." -ForegroundColor Cyan
+Write-Host ">> [bird] Feeding the sources to Maven. This is the boring bit, grab a coffee." -ForegroundColor Cyan
 mvn clean package -DskipTests -f "$PSScriptRoot\pom.xml"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "==> Maven build failed." -ForegroundColor Red
+    Write-Host ">> [bird] Maven threw a tantrum (exit $LASTEXITCODE). Build's off. Fix your code." -ForegroundColor Red
     exit $LASTEXITCODE
 }
-Write-Host "==> Maven build complete." -ForegroundColor Green
+Write-Host ">> [bird] Maven's done and the JAR lives. Onward." -ForegroundColor Green
 
 # Step 2: Copy built JAR to jar/
 $builtJar = Get-ChildItem "$PSScriptRoot\target\*-jar-with-dependencies.jar" | Select-Object -First 1
 if (-not $builtJar) {
-    Write-Host "==> Could not find jar-with-dependencies in target/." -ForegroundColor Red
+    Write-Host ">> [bird] No fat JAR in target/. Did Maven actually do anything, or did it just nap?" -ForegroundColor Red
     exit 1
 }
-Write-Host "==> Copying $($builtJar.Name) -> jar\MegaBasterd.jar..." -ForegroundColor Cyan
+Write-Host ">> [bird] Hauling $($builtJar.Name) over to jar\MegaBasterd.jar..." -ForegroundColor Cyan
 Copy-Item $builtJar.FullName "$PSScriptRoot\jar\MegaBasterd.jar" -Force
-Write-Host "==> JAR copied." -ForegroundColor Green
+Write-Host ">> [bird] JAR parked safely in jar\." -ForegroundColor Green
 
 # Step 3: Kill running app and clean dist
 if (Test-Path $distPath) {
     $proc = Get-Process -Name MegaBasterd -ErrorAction SilentlyContinue
     if ($proc) {
-        Write-Host "==> Stopping running MegaBasterd process (PID $($proc.Id))..." -ForegroundColor Yellow
+        Write-Host ">> [bird] MegaBasterd's already running (PID $($proc.Id)). Putting it out of its misery..." -ForegroundColor Yellow
         $proc | Stop-Process -Force
         Start-Sleep -Seconds 1
     }
-    Write-Host "==> Removing existing dist at $distPath..." -ForegroundColor Yellow
+    Write-Host ">> [bird] Bulldozing the old dist at $distPath..." -ForegroundColor Yellow
     Remove-Item $distPath -Recurse -Force
-    Write-Host "==> Removed." -ForegroundColor Green
+    Write-Host ">> [bird] Old build? Never heard of it." -ForegroundColor Green
 }
 
 # Step 4: Stage the jpackage input directory
@@ -41,16 +41,16 @@ if (Test-Path $distPath) {
 # directory holding only the main JAR instead. It lives under target\ so
 # `mvn clean` on the next run wipes it.
 $stagePath = "$PSScriptRoot\target\jpackage-input"
-Write-Host "==> Staging jpackage input at $stagePath..." -ForegroundColor Cyan
+Write-Host ">> [bird] Setting the table for jpackage at $stagePath (just the one JAR, no gate-crashers)..." -ForegroundColor Cyan
 if (Test-Path $stagePath) {
     Remove-Item $stagePath -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $stagePath | Out-Null
 Copy-Item "$PSScriptRoot\jar\MegaBasterd.jar" $stagePath -Force
-Write-Host "==> Staged $((Get-ChildItem $stagePath).Count) file(s)." -ForegroundColor Green
+Write-Host ">> [bird] Table set: $((Get-ChildItem $stagePath).Count) file(s), exactly as invited." -ForegroundColor Green
 
 # Step 5: jpackage
-Write-Host "==> Running jpackage..." -ForegroundColor Cyan
+Write-Host ">> [bird] Summoning jpackage to hammer out the .exe. Almost there..." -ForegroundColor Cyan
 jpackage `
   --type app-image `
   --name MegaBasterd `
@@ -63,8 +63,8 @@ jpackage `
   --dest "$PSScriptRoot\dist"
 
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "==> Done! Output: $distPath\MegaBasterd.exe" -ForegroundColor Green
+    Write-Host ">> [bird] Nailed it. Your shiny new bird is at $distPath\MegaBasterd.exe. Go fetch." -ForegroundColor Green
 } else {
-    Write-Host "==> jpackage failed with exit code $LASTEXITCODE" -ForegroundColor Red
+    Write-Host ">> [bird] jpackage choked (exit $LASTEXITCODE). No .exe for you today." -ForegroundColor Red
     exit $LASTEXITCODE
 }
