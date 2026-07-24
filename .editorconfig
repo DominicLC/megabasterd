@@ -1,0 +1,30 @@
+# EditorConfig for the MegaBasterd fork.
+#
+# Deliberately conservative: this repo tracks upstream (tonikelope/megabasterd),
+# which ships MIXED line endings (many files CRLF, some LF, each matching
+# upstream per-file). We therefore do NOT set `end_of_line` and leave
+# trim_trailing_whitespace off, so no editor renormalizes an upstream file on
+# save and turns a clean upstream merge into a conflict. See CLAUDE.md
+# "Upstream-merge hygiene".
+root = true
+
+[*]
+charset = utf-8
+trim_trailing_whitespace = false
+
+[*.java]
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+
+[*.{ps1,psm1,psd1}]
+indent_style = space
+indent_size = 4
+
+[*.xml]
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2

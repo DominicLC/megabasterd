@@ -1,0 +1,31 @@
+# Preserve line endings EXACTLY as committed.
+#
+# This is a fork of upstream (tonikelope/megabasterd), which ships MIXED line
+# endings -- many files are CRLF, some are LF, each matching upstream per-file.
+# Any automatic normalization (e.g. `* text=auto`) would flip files to LF and
+# cause a conflict against upstream on every future merge.
+#
+# `-text` disables ALL end-of-line conversion, so files are stored and checked
+# out byte-for-byte no matter what anyone's core.autocrlf is set to. It does NOT
+# renormalize existing files (unlike text/text=auto), so adding this file causes
+# zero churn. Real text files still diff normally -- Git auto-detects text vs
+# binary for diffs independently of the `text` attribute.
+#
+# See CLAUDE.md "Upstream-merge hygiene". Do NOT change this to text=auto.
+* -text
+
+# Be explicit about binaries so Git never attempts text diffs or merges on them
+# (`binary` is shorthand for `-diff -merge -text`).
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.jar   binary
+*.exe   binary
+*.dll   binary
+*.so    binary
+*.dylib binary
+*.zip   binary
+*.gz    binary
