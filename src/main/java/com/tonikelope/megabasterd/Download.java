@@ -1087,6 +1087,8 @@ public class Download implements Transference, Runnable, SecureSingleThreadNotif
                     _auto_retry_on_error = false;
 
                     getView().printStatusError(_status_error);
+
+                    _file = null;
                 }
 
             } else if (_status_error != null) {
